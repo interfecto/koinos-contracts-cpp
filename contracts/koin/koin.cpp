@@ -29,55 +29,16 @@ static const std::string koinos_name   = "Koin";
 static const std::string koinos_symbol = "KOIN";
 #endif
 constexpr uint32_t koinos_decimals     = 8;
-constexpr uint64_t mana_regen_time_ms  = 432'000'000; // 5 days
 constexpr std::size_t max_address_size = 25;
 constexpr std::size_t max_name_size    = 32;
 constexpr std::size_t max_symbol_size  = 8;
 constexpr std::size_t max_buffer_size  = 2048;
 constexpr uint32_t supply_id           = 0;
 constexpr uint32_t balance_id          = 1;
-std::string supply_key                 = "";
+const system::bytes supply_key         = system::bytes();
 const auto contract_id                 = system::get_contract_id();
 
 } // constants
-
-namespace state {
-
-namespace detail {
-
-system::object_space create_supply_space()
-{
-   system::object_space supply_space;
-   supply_space.mutable_zone().set( reinterpret_cast< const uint8_t* >( constants::contract_id.data() ), constants::contract_id.size() );
-   supply_space.set_id( constants::supply_id );
-   supply_space.set_system( true );
-   return supply_space;
-}
-
-system::object_space create_balance_space()
-{
-   system::object_space balance_space;
-   balance_space.mutable_zone().set( reinterpret_cast< const uint8_t* >( constants::contract_id.data() ), constants::contract_id.size() );
-   balance_space.set_id( constants::balance_id );
-   balance_space.set_system( true );
-   return balance_space;
-}
-
-} // detail
-
-const system::object_space& supply_space()
-{
-   static const auto supply_space = detail::create_supply_space();
-   return supply_space;
-}
-
-const system::object_space& balance_space()
-{
-   static const auto balance_space = detail::create_balance_space();
-   return balance_space;
-}
-
-} // state
 
 enum entries : uint32_t
 {
@@ -94,82 +55,7 @@ enum entries : uint32_t
    authorize_entry          = 0x4a2dbd90
 };
 
-std::string arguments; // Declared globally to pass to check_authority
-
-using get_account_rc_arguments
-   = chain::get_account_rc_arguments<
-      constants::max_name_size
-   >;
-
-using consume_account_rc_arguments
-   = chain::consume_account_rc_arguments<
-      constants::max_name_size
-   >;
-
-void regenerate_mana( koin::mana_balance_object& bal )
-{
-   auto head_block_time = system::get_head_info().head_block_time();
-   auto delta = std::min( head_block_time - bal.last_mana_update(), constants::mana_regen_time_ms );
-   if ( delta )
-   {
-      auto new_mana = bal.mana() + ( ( int128_t( delta ) * int128_t( bal.balance() ) ) / constants::mana_regen_time_ms ).convert_to< uint64_t >() ;
-      bal.set_mana( std::min( new_mana, bal.balance() ) );
-      bal.set_last_mana_update( head_block_time );
-   }
-}
-
-chain::get_account_rc_result get_account_rc( const get_account_rc_arguments& args )
-{
-   std::string owner( reinterpret_cast< const char* >( args.get_account().get_const() ), args.get_account().get_length() );
-   chain::get_account_rc_result res;
-
-   if ( owner == contracts::governance_address() )
-   {
-      res.set_value( std::numeric_limits< uint64_t >::max() );
-      return res;
-   }
-
-   koin::mana_balance_object bal_obj;
-   system::get_object( state::balance_space(), owner, bal_obj );
-
-   regenerate_mana( bal_obj );
-
-   res.set_value( bal_obj.get_mana() );
-   return res;
-}
-
-chain::consume_account_rc_result consume_account_rc( const consume_account_rc_arguments& args )
-{
-   chain::consume_account_rc_result res;
-   res.set_value( false );
-
-   const auto [caller, privilege] = system::get_caller();
-   if ( privilege != chain::privilege::kernel_mode )
-   {
-      system::log( "The system call consume_account_rc must be called from kernel context" );
-      return res;
-   }
-
-   std::string owner( reinterpret_cast< const char* >( args.get_account().get_const() ), args.get_account().get_length() );
-   koin::mana_balance_object bal_obj;
-   system::get_object( state::balance_space(), owner, bal_obj );
-
-   regenerate_mana( bal_obj );
-
-   // Assumes mana cannot go negative...
-   if ( bal_obj.mana() < args.value() )
-   {
-      system::log( "Account has insufficient mana for consumption" );
-      return res;
-   }
-
-   bal_obj.set_mana( bal_obj.mana() - args.value() );
-
-   system::put_object( state::balance_space(), owner, bal_obj );
-
-   res.set_value( true );
-   return res;
-}
+system::bytes arguments; // Declared globally to pass to check_authority
 
 token::name_result< constants::max_name_size > name()
 {
@@ -196,10 +82,7 @@ token::total_supply_result total_supply()
 {
    token::total_supply_result res;
 
-   token::balance_object bal_obj;
-   system::get_object( state::supply_space(), constants::supply_key, bal_obj );
-
-   res.mutable_value() = bal_obj.get_value();
+   res.set_value( system::get_object< uint64_t >( constants::supply_id, constants::supply_key ) );
    return res;
 }
 
@@ -207,80 +90,63 @@ token::balance_of_result balance_of( const token::balance_of_arguments< constant
 {
    token::balance_of_result res;
 
-   std::string owner( reinterpret_cast< const char* >( args.get_owner().get_const() ), args.get_owner().get_length() );
+   system::bytes owner(
+      reinterpret_cast< const std::byte* >( args.get_owner().get_const() ),
+      reinterpret_cast< const std::byte* >( args.get_owner().get_const() ) + args.get_owner().get_length() );
 
-   koin::mana_balance_object bal_obj;
-   system::get_object( state::balance_space(), owner, bal_obj );
-
-   res.set_value( bal_obj.get_balance() );
+   res.set_value( system::get_object< uint64_t >( constants::balance_id, owner ) );
    return res;
 }
 
 token::transfer_result transfer( const token::transfer_arguments< constants::max_address_size, constants::max_address_size >& args )
 {
-   std::string from( reinterpret_cast< const char* >( args.get_from().get_const() ), args.get_from().get_length() );
-   std::string to( reinterpret_cast< const char* >( args.get_to().get_const() ), args.get_to().get_length() );
+   system::bytes from(
+      reinterpret_cast< const std::byte* >( args.get_from().get_const() ),
+      reinterpret_cast< const std::byte* >( args.get_from().get_const() ) + args.get_from().get_length() );
+   system::bytes to(
+      reinterpret_cast< const std::byte* >( args.get_to().get_const() ),
+      reinterpret_cast< const std::byte* >( args.get_to().get_const() ) + args.get_to().get_length() );
    uint64_t value = args.get_value();
 
    if ( from == to )
       system::fail( "cannot transfer to self" );
 
-   const auto [ caller, privilege ] = system::get_caller();
+   const auto caller = system::get_caller();
    if ( caller != from && !system::check_authority( from, arguments ) )
       system::fail( "from has not authorized transfer", chain::error_code::authorization_failure );
 
-   koin::mana_balance_object from_bal_obj;
-   system::get_object( state::balance_space(), from, from_bal_obj );
+   auto from_balance = system::get_object< uint64_t >( constants::balance_id, from );
 
-   if ( from_bal_obj.balance() < value )
+   if ( from_balance < value )
       system::fail( "account 'from' has insufficient balance" );
 
-   regenerate_mana( from_bal_obj );
+   auto to_balance = system::get_object< uint64_t >( constants::balance_id, to );
 
-   if ( from_bal_obj.mana() < value )
-      system::fail( "account 'from' has insufficient mana for transfer" );
+   from_balance -= value;
+   to_balance += value;
 
-   koin::mana_balance_object to_bal_obj;
-   system::get_object( state::balance_space(), to, to_bal_obj );
+   system::put_object( constants::balance_id, from, from_balance );
+   system::put_object( constants::balance_id, to, to_balance );
 
-   regenerate_mana( to_bal_obj );
-
-   from_bal_obj.set_balance( from_bal_obj.balance() - value );
-   from_bal_obj.set_mana( from_bal_obj.mana() - value );
-   to_bal_obj.set_balance( to_bal_obj.balance() + value );
-   to_bal_obj.set_mana( to_bal_obj.mana() + value );
-
-   system::put_object( state::balance_space(), from, from_bal_obj );
-   system::put_object( state::balance_space(), to, to_bal_obj );
-
-   token::transfer_event< constants::max_address_size, constants::max_address_size > transfer_event;
-   transfer_event.mutable_from().set( args.get_from().get_const(), args.get_from().get_length() );
-   transfer_event.mutable_to().set( args.get_to().get_const(), args.get_to().get_length() );
-   transfer_event.set_value( args.get_value() );
-
-   std::vector< std::string > impacted;
-   impacted.push_back( to );
-   impacted.push_back( from );
-   koinos::system::event( "koinos.contracts.token.transfer_event", transfer_event, impacted );
+//   token::transfer_event< constants::max_address_size, constants::max_address_size > transfer_event;
+//   transfer_event.mutable_from().set( args.get_from().get_const(), args.get_from().get_length() );
+//   transfer_event.mutable_to().set( args.get_to().get_const(), args.get_to().get_length() );
+//   transfer_event.set_value( args.get_value() );
+//
+//   std::vector< std::string > impacted;
+//   impacted.push_back( to );
+//   impacted.push_back( from );
+//   koinos::system::event( "koinos.contracts.token.transfer_event", transfer_event, impacted );
 
    return token::transfer_result();
 }
 
 token::mint_result mint( const token::mint_arguments< constants::max_address_size >& args )
 {
-   std::string to( reinterpret_cast< const char* >( args.get_to().get_const() ), args.get_to().get_length() );
+   system::bytes to(
+      reinterpret_cast< const std::byte* >( args.get_to().get_const() ),
+      reinterpret_cast< const std::byte* >( args.get_to().get_const() ) + args.get_to().get_length() );
    uint64_t amount = args.get_value();
-
-   const auto [ caller, privilege ] = system::get_caller();
-   if ( privilege != chain::privilege::kernel_mode )
-   {
-#ifdef BUILD_FOR_TESTING
-      if ( !system::check_authority( constants::contract_id ) )
-         system::fail( "can only mint token with contract authority", chain::error_code::authorization_failure );
-#else
-      system::fail( "can only mint token from kernel context", chain::error_code::authorization_failure );
-#endif
-   }
 
    auto supply = total_supply().get_value();
    auto new_supply = supply + amount;
@@ -289,53 +155,40 @@ token::mint_result mint( const token::mint_arguments< constants::max_address_siz
    if ( new_supply < supply )
       system::revert( "mint would overflow supply" );
 
-   koin::mana_balance_object to_bal_obj;
-   system::get_object( state::balance_space(), to, to_bal_obj );
+   auto to_balance = system::get_object< uint64_t >( constants::balance_id, to );
+   to_balance += amount;
 
-   regenerate_mana( to_bal_obj );
+   system::put_object( constants::supply_id, constants::supply_key, new_supply );
+   system::put_object( constants::balance_id, to, to_balance );
 
-   to_bal_obj.set_balance( to_bal_obj.balance() + amount );
-   to_bal_obj.set_mana( to_bal_obj.mana() + amount );
-
-   token::balance_object supply_obj;
-   supply_obj.set_value( new_supply );
-
-   system::put_object( state::supply_space(), constants::supply_key, supply_obj );
-   system::put_object( state::balance_space(), to, to_bal_obj );
-
-   token::mint_event< constants::max_address_size > mint_event;
-   mint_event.mutable_to().set( args.get_to().get_const(), args.get_to().get_length() );
-   mint_event.set_value( amount );
-
-   std::vector< std::string > impacted;
-   impacted.push_back( to );
-   koinos::system::event( "koinos.contracts.token.mint_event", mint_event, impacted );
+//   token::mint_event< constants::max_address_size > mint_event;
+//   mint_event.mutable_to().set( args.get_to().get_const(), args.get_to().get_length() );
+//   mint_event.set_value( amount );
+//
+//   std::vector< std::string > impacted;
+//   impacted.push_back( to );
+//   koinos::system::event( "koinos.contracts.token.mint_event", mint_event, impacted );
 
    return token::mint_result();
 }
 
 token::burn_result burn( const token::burn_arguments< constants::max_address_size >& args )
 {
-   std::string from( reinterpret_cast< const char* >( args.get_from().get_const() ), args.get_from().get_length() );
+   system::bytes from(
+      reinterpret_cast< const std::byte* >( args.get_from().get_const() ),
+      reinterpret_cast< const std::byte* >( args.get_from().get_const() ) + args.get_from().get_length() );
    uint64_t value = args.get_value();
 
-   const auto [ caller, privilege ] = system::get_caller();
+   const auto caller = system::get_caller();
    if ( caller != from && !system::check_authority( from, arguments ) )
       system::fail( "from has not authorized burn", chain::error_code::authorization_failure );
 
-   koin::mana_balance_object from_bal_obj;
-   system::get_object( state::balance_space(), from, from_bal_obj );
+   auto from_balance = system::get_object< uint64_t >( constants::balance_id, from );
 
-   if ( from_bal_obj.balance() < value )
+   if ( from_balance < value )
       system::fail( "account 'from' has insufficient balance" );
 
-   regenerate_mana( from_bal_obj );
-
-   if ( from_bal_obj.mana() < value )
-      system::fail( "account 'from' has insufficient mana for burn" );
-
-   from_bal_obj.set_balance( from_bal_obj.balance() - value );
-   from_bal_obj.set_mana( from_bal_obj.mana() - value );
+   from_balance -= value;
 
    auto supply = total_supply().get_value();
 
@@ -345,19 +198,16 @@ token::burn_result burn( const token::burn_arguments< constants::max_address_siz
 
    auto new_supply = supply - value;
 
-   token::balance_object supply_obj;
-   supply_obj.set_value( new_supply );
+   system::put_object( constants::supply_id, constants::supply_key, new_supply );
+   system::put_object( constants::balance_id, from, from_balance );
 
-   system::put_object( state::supply_space(), constants::supply_key, supply_obj );
-   system::put_object( state::balance_space(), from, from_bal_obj );
-
-   token::burn_event< constants::max_address_size > burn_event;
-   burn_event.mutable_from().set( args.get_from().get_const(), args.get_from().get_length() );
-   burn_event.set_value( args.get_value() );
-
-   std::vector< std::string > impacted;
-   impacted.push_back( from );
-   koinos::system::event( "koinos.contracts.token.burn_event", burn_event, impacted );
+//   token::burn_event< constants::max_address_size > burn_event;
+//   burn_event.mutable_from().set( args.get_from().get_const(), args.get_from().get_length() );
+//   burn_event.set_value( args.get_value() );
+//
+//   std::vector< std::string > impacted;
+//   impacted.push_back( from );
+//   koinos::system::event( "koinos.contracts.token.burn_event", burn_event, impacted );
 
    return token::burn_result();
 }
@@ -369,29 +219,11 @@ int main()
 
    std::array< uint8_t, constants::max_buffer_size > retbuf;
 
-   koinos::read_buffer rdbuf( (uint8_t*)arguments.c_str(), arguments.size() );
+   koinos::read_buffer rdbuf( reinterpret_cast< uint8_t* >( arguments.data() ), arguments.size() );
    koinos::write_buffer buffer( retbuf.data(), retbuf.size() );
 
    switch( std::underlying_type_t< entries >( entry_point ) )
    {
-      case entries::get_account_rc_entry:
-      {
-         get_account_rc_arguments arg;
-         arg.deserialize( rdbuf );
-
-         auto res = get_account_rc( arg );
-         res.serialize( buffer );
-         break;
-      }
-      case entries::consume_account_rc_entry:
-      {
-         consume_account_rc_arguments arg;
-         arg.deserialize( rdbuf );
-
-         auto res = consume_account_rc( arg );
-         res.serialize( buffer );
-         break;
-      }
       case entries::name_entry:
       {
          auto res = name();
@@ -449,13 +281,6 @@ int main()
          arg.deserialize( rdbuf );
 
          auto res = burn( arg );
-         res.serialize( buffer );
-         break;
-      }
-      case entries::authorize_entry:
-      {
-         chain::authorize_result res;
-         res.set_value( system::check_system_authority() );
          res.serialize( buffer );
          break;
       }
