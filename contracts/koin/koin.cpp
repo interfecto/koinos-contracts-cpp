@@ -91,8 +91,7 @@ token::balance_of_result balance_of( const token::balance_of_arguments< constant
    token::balance_of_result res;
 
    system::bytes owner(
-      reinterpret_cast< const std::byte* >( args.get_owner().get_const() ),
-      reinterpret_cast< const std::byte* >( args.get_owner().get_const() ) + args.get_owner().get_length() );
+      reinterpret_cast< const char* >( args.get_owner().get_const() ), args.get_owner().get_length() );
 
    res.set_value( system::get_object< uint64_t >( constants::balance_id, owner ) );
    return res;
@@ -101,11 +100,9 @@ token::balance_of_result balance_of( const token::balance_of_arguments< constant
 token::transfer_result transfer( const token::transfer_arguments< constants::max_address_size, constants::max_address_size >& args )
 {
    system::bytes from(
-      reinterpret_cast< const std::byte* >( args.get_from().get_const() ),
-      reinterpret_cast< const std::byte* >( args.get_from().get_const() ) + args.get_from().get_length() );
+      reinterpret_cast< const char* >( args.get_from().get_const() ), args.get_from().get_length() );
    system::bytes to(
-      reinterpret_cast< const std::byte* >( args.get_to().get_const() ),
-      reinterpret_cast< const std::byte* >( args.get_to().get_const() ) + args.get_to().get_length() );
+      reinterpret_cast< const char* >( args.get_to().get_const() ), args.get_to().get_length() );
    uint64_t value = args.get_value();
 
    if ( from == to )
@@ -144,8 +141,7 @@ token::transfer_result transfer( const token::transfer_arguments< constants::max
 token::mint_result mint( const token::mint_arguments< constants::max_address_size >& args )
 {
    system::bytes to(
-      reinterpret_cast< const std::byte* >( args.get_to().get_const() ),
-      reinterpret_cast< const std::byte* >( args.get_to().get_const() ) + args.get_to().get_length() );
+      reinterpret_cast< const char* >( args.get_to().get_const() ), args.get_to().get_length() );
    uint64_t amount = args.get_value();
 
    auto supply = total_supply().get_value();
@@ -175,8 +171,7 @@ token::mint_result mint( const token::mint_arguments< constants::max_address_siz
 token::burn_result burn( const token::burn_arguments< constants::max_address_size >& args )
 {
    system::bytes from(
-      reinterpret_cast< const std::byte* >( args.get_from().get_const() ),
-      reinterpret_cast< const std::byte* >( args.get_from().get_const() ) + args.get_from().get_length() );
+      reinterpret_cast< const char* >( args.get_from().get_const() ), args.get_from().get_length() );
    uint64_t value = args.get_value();
 
    const auto caller = system::get_caller();
@@ -219,7 +214,7 @@ int main()
 
    std::array< uint8_t, constants::max_buffer_size > retbuf;
 
-   koinos::read_buffer rdbuf( reinterpret_cast< uint8_t* >( arguments.data() ), arguments.size() );
+   koinos::read_buffer rdbuf( reinterpret_cast< const uint8_t* >( arguments.data() ), arguments.size() );
    koinos::write_buffer buffer( retbuf.data(), retbuf.size() );
 
    switch( std::underlying_type_t< entries >( entry_point ) )
@@ -285,7 +280,7 @@ int main()
          break;
       }
       default:
-         system::revert( "unknown entry point" );
+         system::revert( "unknown entry point: " + std::to_string( entry_point ) );
    }
 
    system::result r;
